@@ -130,3 +130,18 @@ argsp.add_argument("path",
 def cmd_init(args):
     repo_create(args.path)
 
+def repo_find(path=".", required=True):
+    path = os.path.realpath(path)
+
+    if os.path.isdir(os.path.join(path, ".git")):
+        return GitRepository(path)
+    
+    parent = os.path.realpath(os.path.join(".."))
+
+    if parent == path:
+        if required:
+            return Exception("No git directory found")
+        else:
+            return None
+    
+    return repo_find(parent, required)
