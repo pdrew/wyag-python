@@ -337,3 +337,20 @@ def kvlm_parse(raw, start=0, dct=None):
 
     return kvlm_parse(raw, start=end + 1, dct=dct)
     
+def kvlm_serialise(kvlm):
+    ret = b''
+
+    for key in kvlm.keys():
+        if not key:
+            continue
+        value = kvlm[key]
+        if type(value) != list:
+            value = [value]
+
+        for v in value:
+            ret += key + b' ' + v.replace(b'\n', b'\n ') + b'\n'
+
+    ret += b'\n' + kvlm[None] + b'\n'
+
+    return ret
+
