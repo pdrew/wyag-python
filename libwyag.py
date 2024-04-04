@@ -22,6 +22,7 @@ def main(argv=sys.argv[1:]):
         case "init"         : cmd_init(args)
         case "cat-file"     : cmd_cat_file(args)
         case "hash-object"  : cmd_hash_object(args)
+        case "log"          : cmd_log(args)
         case _              : print("Bad command.")
 
 class GitRepository(object):
@@ -354,3 +355,61 @@ def kvlm_serialise(kvlm):
 
     return ret
 
+class GitCommit(GitObject):
+    fmt = b'commit'
+
+    def deserialise(self, data):
+        self.kvlm = kvlm_parse(data)
+
+    def serialise(self, repo=None):
+        return kvlm_serialise(self.kvlm)
+    
+    def init(self):
+        self.kvlm = dict()
+
+argsp = argsubparsers.add_parser("log", help="Display history of a given commit")
+
+argsp.add_argument("commit",
+                   default="HEAD",
+                   nargs="?",
+                   help="Commit to start at")
+
+def cmd_log(args):
+    repo = repo_find()
+
+    print("digraph wyaglog{")
+    print("  node[shape=rect]")
+    log_graphviz(repo, object_find(repo, args.commit), set())
+    print("}")
+
+def log_graphviz(repo, sha, seen):
+    if sha in seen:
+        return
+    
+    seen.add(sha)
+
+    commit = object_read(repo, sha)
+    short_hash = sha[0:8]
+    message = commit.kvlm[None].decode("utf8").strip()
+    message = message.replace("\\", "\\\\")
+    message = message.replace("\"", "\\\"")
+
+    # Keep only the first line
+    if "\n" in message:
+        message = message[:message.index("\n")]
+
+    print(f"  c_{sha} [label=\"{short_hash}: {message}\"]")
+    assert commit.fmt == b'commit'
+
+    if not b'parent' in commit.kvlm.keys():
+        return
+    
+    parents = commit.kvlm[b'parent']
+
+    if type(parents) != list:
+        parents = [parents]
+
+    for parent in parents:
+        parent = parent.decode("ascii")
+        print(f"  c_{sha} -> c_{parent};")
+        log_graphviz(repo, parent, seen)
