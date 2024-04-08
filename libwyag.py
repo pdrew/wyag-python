@@ -27,6 +27,7 @@ def main(argv=sys.argv[1:]):
         case "checkout"     : cmd_checkout(args)
         case "show-ref"     : cmd_show_ref(args)
         case "tag"          : cmd_tag(args)
+        case "rev-parse"    : cmd_rev_parse(args)
         case _              : print("Bad command.")
 
 class GitRepository(object):
@@ -250,8 +251,40 @@ def cat_file(repo, obj, fmt=None):
     sys.stdout.buffer.write(obj.serialise())
 
 def object_find(repo, name, fmt=None, follow=True):
-    return name
+    sha = object_resolve(repo, name)
 
+    if not sha:
+        raise Exception(f"No such reference {name}")
+    
+    if len(sha) > 1:
+        raise Exception("Ambiguous reference {0}: candidates are: \n - {1}".format(name, "\n - ".join(sha)))
+    
+    sha = sha[0]
+
+    if not fmt:
+        return sha
+    
+    while True:
+        obj = object_read(repo, sha)
+        #     ^^^^^^^^^^^ < this is a bit agressive: we're reading
+        # the full object just to get its type.  And we're doing
+        # that in a loop, albeit normally short.  Don't expect
+        # high performance here.
+
+        if obj.fmt == fmt:
+            return sha
+        
+        if not follow:
+            return None
+        
+        # follow tags
+        if obj.fmt == b'tag':
+            sha = obj.kvlm[b'object'].decode('ascii')
+        elif obj.fmt == b'commit' and fmt == b'tree':
+            sha = obj.kvlm[b'tree'].decode('ascii')
+        else:
+            return None
+        
 argsp = argsubparsers.add_parser("hash-object", help="Compute object ID and optionally creates a blob from a file")
 
 argsp.add_argument("-t",
@@ -510,7 +543,7 @@ def cmd_ls_tree(args):
 def ls_tree(repo, ref, recursive=None, prefix=""):
     sha = object_find(repo, ref, fmt=b'tree')
     obj = object_read(repo, sha)
-
+    
     for item in obj.items:
         if len(item.mode) == 5:
             type = item.mode[0:1]
@@ -523,8 +556,8 @@ def ls_tree(repo, ref, recursive=None, prefix=""):
             case b'12': type = "blob" # symlink
             case b'16': type = "commit" # submodule
             case _: raise Exception(f"Unknown tree leaf mode {item.mode}")
-        
-        if not recursive and type == "tree":
+
+        if not (recursive and type == "tree"):
             print("{0} {1} {2}\t{3}".format(
                 "0" * (6 - len(item.mode)) + item.mode.decode("ascii"),
                 type,
@@ -678,3 +711,74 @@ def tag_create(repo, name, ref, create_tag_object=False):
 def ref_create(repo, ref_name, sha):
     with open(repo_file(repo, "refs/" + ref_name), 'w') as fp:
         fp.write(sha + "\n")
+
+def object_resolve(repo, name):
+    """Resolve name to an object hash in the repo
+
+    This function is aware of:
+
+    - the HEAD literal
+    - short and long hashes
+    - tags
+    - branches
+    - remote branches
+    """
+
+    candidates = list()
+    hash_regex = re.compile(r"^[0-9A-fa-f]{4,40}$")
+
+    if not name.strip():
+        return None
+    
+    if name == "HEAD":
+        return [ ref_resolve(repo, "HEAD") ]
+
+    if hash_regex.match(name):
+        # This may be a hash, either small or full.  4 seems to be the
+        # minimal length for git to consider something a short hash.
+        # This limit is documented in man git-rev-parse
+        name = name.lower()
+        prefix = name[0:2]
+        path = repo_dir(repo, "objects", prefix, mkdir=False)
+
+        if path:
+            rem = name[2:]
+
+            for f in os.listdir(path):
+                if f.startswith(rem):
+                    # Notice a string startswith() itself, so this
+                    # works for full hashes.
+                    candidates.append(prefix + f)
+        
+    as_tag = ref_resolve(repo, "refs/tags/" + name)
+
+    if as_tag:
+        candidates.append(as_tag)
+
+    as_branch = ref_resolve(repo, "refs/heads/" + name)
+
+    if as_branch:
+        candidates.append(as_branch)
+
+    return candidates
+
+argsp = argsubparsers.add_parser("rev-parse", help="Parse revision (or other objects) identifiers")
+
+argsp.add_argument("--wyag-type",
+                   metavar="type",
+                   dest="type",
+                   choices=["blob", "commit", "tag", "tree"],
+                   default=None,
+                   help="Specify the expected type")
+
+argsp.add_argument("name", help="The name to parse")
+
+def cmd_rev_parse(args):
+    if args.type:
+        fmt = args.type.encode()
+    else:
+        fmt = None
+    
+    repo = repo_find()
+
+    print(object_find(repo, args.name, fmt, follow=True))
